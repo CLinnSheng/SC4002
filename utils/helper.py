@@ -1,5 +1,9 @@
 import re
+from typing import Any, List
 
+import torch
+from torch.utils.data import Dataset
+from torchtext.data import Dataset as TorchTextDataset
 import numpy as np
 
 
@@ -48,4 +52,5 @@ def get_context_average_embedding(
     if context_embeddings:
         return np.mean(context_embeddings, axis=0)
 
+    print("ZERO")
     return np.zeros(glove.dim)
