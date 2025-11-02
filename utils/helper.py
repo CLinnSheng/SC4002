@@ -1,11 +1,14 @@
 import re
 from typing import Any, List
 
+import nltk
 import torch
 from torch.utils.data import Dataset
 from torchtext.data import Dataset as TorchTextDataset
 import numpy as np
+from torch import nn
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def get_context_average_embedding(
     sentence_tokens: List[str],
@@ -54,3 +57,57 @@ def get_context_average_embedding(
 
     print("ZERO")
     return np.zeros(glove.dim)
+
+class SentenceDataset(Dataset):
+    def __init__(self, torchtext_examples, index_from_word, label_vocab):
+        self.examples = torchtext_examples
+        self.index_from_word = index_from_word
+        self.label_vocab = label_vocab
+        
+        # Use index 1 for <unk> (unknown). 0 is often <pad>.
+        # Check your index_from_word to see what your <unk> token is.
+        # If it doesn't have one, define it.
+        if "<unk>" in self.index_from_word:
+            self.UNK_INDEX = self.index_from_word["<unk>"]
+        else:
+            self.UNK_INDEX = 0 # A common default
+
+    def __len__(self):
+        return len(self.examples)
+
+    def __getitem__(self, idx):
+        example = self.examples[idx]
+        
+        # --- THIS IS THE CHANGE ---
+        # Convert tokens to indexes using the JSON-loaded dict
+        # Use .get(token, self.UNK_INDEX) to handle out-of-vocabulary words
+        tokens = [self.index_from_word.get(t, self.UNK_INDEX) for t in example.text]
+        # --- END OF CHANGE ---
+        
+        length = len(tokens)
+        
+        # This part is still correct (using the LABEL.vocab)
+        label = self.label_vocab.stoi[example.label]
+        
+        return {
+            "indexes": torch.LongTensor(tokens),
+            "original_len": length,
+            "label": torch.LongTensor([label]).squeeze(0) # This is fine
+        }
+
+def collate_fn(batch):
+    """Pads sequences to max length in batch and returns tensors"""
+    batch_sorted = sorted(batch, key=lambda x: x['original_len'], reverse=True)
+    sequences = [item['indexes'] for item in batch_sorted]
+    lengths = [item['original_len'] for item in batch_sorted]
+    labels = torch.stack([item['label'] for item in batch_sorted])
+
+    sequences_padded = nn.utils.rnn.pad_sequence(sequences, batch_first=True, padding_value=1)
+    lengths_tensor = torch.tensor(lengths, dtype=torch.long)
+
+    return {
+        'indexes': sequences_padded.to(device),
+        'original_len': lengths_tensor.to(device),
+        'label': labels.to(device)
+    }
+
