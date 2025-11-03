@@ -65,7 +65,8 @@ def train_rnn_model_with_parameters(
         shuffle=True,
         num_workers=num_workers,
         collate_fn=collate_fn,
-        multiprocessing_context='spawn'
+        multiprocessing_context='spawn',
+        persistent_workers=True
     )
     val_dataloader = DataLoader(
         val_dataset,
@@ -73,7 +74,8 @@ def train_rnn_model_with_parameters(
         shuffle=False,
         num_workers=num_workers,
         collate_fn=collate_fn,
-        multiprocessing_context='spawn'
+        multiprocessing_context='spawn',
+        persistent_workers=True
     )
 
     # Train model.
@@ -113,8 +115,10 @@ def train_rnn_model_with_parameters(
         min_epochs=min_epochs,
         max_epochs=max_epochs,
         logger=logger,
-        accelerator="cpu",
+        accelerator="gpu",
         log_every_n_steps=5,
+        gradient_clip_val=1.0,
+        gradient_clip_algorithm="norm",
     )
 
     trainer.fit(

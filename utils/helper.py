@@ -95,19 +95,41 @@ class SentenceDataset(Dataset):
             "label": torch.LongTensor([label]).squeeze(0) # This is fine
         }
 
+# def collate_fn(batch):
+#     """Pads sequences to max length in batch and returns tensors"""
+#     batch_sorted = sorted(batch, key=lambda x: x['original_len'], reverse=True)
+#     sequences = [item['indexes'] for item in batch_sorted]
+#     lengths = [item['original_len'] for item in batch_sorted]
+#     labels = torch.stack([item['label'] for item in batch_sorted])
+
+#     sequences_padded = nn.utils.rnn.pad_sequence(sequences, batch_first=True, padding_value=1)
+#     lengths_tensor = torch.tensor(lengths, dtype=torch.long)
+
+#     return {
+#         'indexes': sequences_padded.to(device),
+#         'original_len': lengths_tensor.to(device),
+#         'label': labels.to(device)
+#     }
+
 def collate_fn(batch):
     """Pads sequences to max length in batch and returns tensors"""
+    # Sort by length (good practice for pack_padded_sequence, though not strictly required if enforce_sorted=False)
     batch_sorted = sorted(batch, key=lambda x: x['original_len'], reverse=True)
+    
     sequences = [item['indexes'] for item in batch_sorted]
     lengths = [item['original_len'] for item in batch_sorted]
     labels = torch.stack([item['label'] for item in batch_sorted])
 
+    # Pad sequences. Make sure padding_value=1 is your <pad> token's index.
     sequences_padded = nn.utils.rnn.pad_sequence(sequences, batch_first=True, padding_value=1)
+    
+    # Create lengths tensor
     lengths_tensor = torch.tensor(lengths, dtype=torch.long)
 
+    # Return a dictionary of CPU tensors.
+    # PyTorch Lightning will move this batch to the GPU for you.
     return {
-        'indexes': sequences_padded.to(device),
-        'original_len': lengths_tensor.to(device),
-        'label': labels.to(device)
+        'indexes': sequences_padded,
+        'original_len': lengths_tensor,
+        'label': labels
     }
-
