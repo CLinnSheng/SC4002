@@ -64,13 +64,7 @@ class SentenceDataset(Dataset):
         self.index_from_word = index_from_word
         self.label_vocab = label_vocab
         
-        # Use index 1 for <unk> (unknown). 0 is often <pad>.
-        # Check your index_from_word to see what your <unk> token is.
-        # If it doesn't have one, define it.
-        if "<unk>" in self.index_from_word:
-            self.UNK_INDEX = self.index_from_word["<unk>"]
-        else:
-            self.UNK_INDEX = 0 # A common default
+        self.UNK_INDEX = 0 
 
     def __len__(self):
         return len(self.examples)
@@ -78,15 +72,10 @@ class SentenceDataset(Dataset):
     def __getitem__(self, idx):
         example = self.examples[idx]
         
-        # --- THIS IS THE CHANGE ---
-        # Convert tokens to indexes using the JSON-loaded dict
-        # Use .get(token, self.UNK_INDEX) to handle out-of-vocabulary words
         tokens = [self.index_from_word.get(t, self.UNK_INDEX) for t in example.text]
-        # --- END OF CHANGE ---
         
         length = len(tokens)
         
-        # This part is still correct (using the LABEL.vocab)
         label = self.label_vocab.stoi[example.label]
         
         return {

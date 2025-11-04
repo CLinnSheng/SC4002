@@ -18,6 +18,8 @@ class RNN(nn.Module):
         freeze_embedding: bool = False,
         rnn_type: str = "RNN",
         bidirectional: bool = False,
+        dropout: float = 0.0,
+        embedding_dropout: float = 0.0,
     ):
         """
         RNN model with pretrained embeddings for text classification tasks.
@@ -35,18 +37,14 @@ class RNN(nn.Module):
             bidirectional (bool): If True, use a bidirectional RNN (default: False).
         """
         super(RNN, self).__init__()
-    # Check embedding quality
-        # Check embedding quality
-        # print(f"Embedding matrix stats:")
-        # print(f"  Shape: {embedding_matrix.shape}")
-        # print(f"  Non-zero rows: {(np.abs(embedding_matrix).sum(axis=1) > 0).sum()}")
-        # print(f"  Mean: {embedding_matrix.mean():.4f}")
-        # print(f"  Std: {embedding_matrix.std():.4f}")
+
         self.hidden_dim = hidden_dim
         self.output_dim = output_dim
         self.num_layers = num_layers
         self.bidirectional = bidirectional
         self.rnn_type = rnn_type
+        self.dropout = dropout
+        self.embedding_dropout = nn.Dropout(embedding_dropout)
 
         if sentence_representation_type not in ["last", "max", "average"]:
             raise Exception(
@@ -59,6 +57,7 @@ class RNN(nn.Module):
         self.embedding = nn.Embedding.from_pretrained(
             torch.FloatTensor(embedding_matrix), freeze=freeze_embedding
         )
+
         # Choose RNN layer
         if rnn_type == "GRU":
             self.rnn = nn.GRU(
@@ -67,6 +66,7 @@ class RNN(nn.Module):
                 num_layers,
                 batch_first=True,
                 bidirectional=bidirectional,
+                dropout=dropout if num_layers > 1 else 0
             )
         elif rnn_type == "LSTM":
             self.rnn = nn.LSTM(
@@ -75,9 +75,17 @@ class RNN(nn.Module):
                 num_layers,
                 batch_first=True,
                 bidirectional=bidirectional,
+                dropout=dropout if num_layers > 1 else 0
             )
         elif rnn_type == "RNN":
-            self.rnn = nn.RNN(embedding_dim, hidden_dim, num_layers, batch_first=True)
+            self.rnn = nn.RNN(
+                embedding_dim, 
+                hidden_dim, 
+                num_layers,
+                batch_first=True,
+                bidirectional=bidirectional,
+                dropout=dropout if num_layers > 1 else 0 
+            )
         else:
             raise ValueError("Invalid `rnn_type`. Choose from 'GRU', 'LSTM', or 'RNN'.")
 
@@ -87,9 +95,11 @@ class RNN(nn.Module):
         self.fc = nn.Linear(rnn_output_dim, rnn_output_dim // 2)
         self.relu = nn.ReLU()
         self.fc2 = nn.Linear(rnn_output_dim // 2, output_dim)
+        self.fc_dropout = nn.Dropout(dropout)
 
     def forward(self, sequences, original_len):
         embeddings = self.embedding(sequences)
+        embeddings = self.embedding_dropout(embeddings)
 
         # Handle variable length sequences
         packed_input = pack_padded_sequence(
@@ -123,26 +133,35 @@ class RNN(nn.Module):
             if self.rnn_type == "LSTM":
                 h_n, c_n = hidden  # Unpack LSTM hidden state tuple
                 if self.bidirectional:
-                    # Concatenate last forward and backward hidden states
                     sentence_representation = torch.cat((h_n[-2], h_n[-1]), dim=1)
                 else:
-                    # Take last layer's hidden state
                     sentence_representation = h_n[-1]
             elif self.rnn_type == "GRU":
                 if self.bidirectional:
-                    # Concatenate last forward and backward hidden states
                     sentence_representation = torch.cat((hidden[-2], hidden[-1]), dim=1)
                 else:
                     sentence_representation = hidden[-1]
             else:  # Regular RNN
                 sentence_representation = hidden[-1]
             
+        # elif self.sentence_representation_type == "max":
+        #     sentence_representation, _ = torch.max(output, dim=1)
+        # elif self.sentence_representation_type == "average":
+        #     sentence_representation = torch.mean(output, dim=1)
         elif self.sentence_representation_type == "max":
-            sentence_representation, _ = torch.max(output, dim=1)
+                # Create mask: [batch, seq_len]
+            mask = torch.arange(output.size(1), device=output.device).unsqueeze(0) < original_len.unsqueeze(1)
+            mask = mask.unsqueeze(-1)  # [batch, seq_len, 1]
+            masked_output = output.masked_fill(~mask, float('-inf'))
+            sentence_representation, _ = torch.max(masked_output, dim=1)
+            
         elif self.sentence_representation_type == "average":
-            sentence_representation = torch.mean(output, dim=1)
+            mask = torch.arange(output.size(1), device=output.device).unsqueeze(0) < original_len.unsqueeze(1)
+            mask = mask.unsqueeze(-1).float()  # [batch, seq_len, 1]
+            sentence_representation = (output * mask).sum(dim=1) / mask.sum(dim=1)
+            # logits = self.fc2(self.relu(self.fc(sentence_representation)))
 
-        # output layer
+        sentence_representation = self.fc_dropout(sentence_representation)
         logits = self.fc2(self.relu(self.fc(sentence_representation)))
 
         return logits
@@ -152,7 +171,7 @@ class RNN(nn.Module):
 
 
 class RNNClassifier(L.LightningModule):
-    """RNN Classifier for binary classification tasks using PyTorch Lightning.
+    """
 
     Args:
         rnn_model (torch.nn.Module): The RNN model used for generating logits from inputs.
@@ -167,12 +186,14 @@ class RNNClassifier(L.LightningModule):
         optimizer_name: str,
         lr: float,
         show_progress: bool = False,
+        weight_decay: float = 0.0,
     ):
         super().__init__()
         self.model = rnn_model
         self.optimizer_name = optimizer_name
         self.lr = lr
         self.show_progress = show_progress
+        self.weight_decay = weight_decay
         self.metric = MulticlassAccuracy(num_classes=6)
         self.save_hyperparameters()
 
@@ -185,12 +206,6 @@ class RNNClassifier(L.LightningModule):
 
         loss = F.cross_entropy(logits, labels)
         acc = self.metric(logits, labels)
-
-        if batch_idx == 0:
-            print(f"Logits range: [{logits.min():.3f}, {logits.max():.3f}]")
-            print(f"Loss: {loss.item():.3f}")
-            print(f"Predictions: {logits.argmax(dim=1)[:5]}")
-            print(f"True labels: {labels[:5]}")
 
         self.log("train_loss", loss, prog_bar=self.show_progress)
         self.log("train_acc", acc, prog_bar=self.show_progress)
@@ -232,13 +247,13 @@ class RNNClassifier(L.LightningModule):
 
     def configure_optimizers(self):
         if self.optimizer_name == "SGD":
-            optimizer = torch.optim.SGD(self.model.parameters(), lr=self.lr)
+            optimizer = torch.optim.SGD(self.model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
         elif self.optimizer_name == "Adagrad":
-            optimizer = torch.optim.Adagrad(self.model.parameters(), lr=self.lr)
+                optimizer = torch.optim.Adagrad(self.model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
         elif self.optimizer_name == "Adam":
-            optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr)
+             optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
         elif self.optimizer_name == "RMSprop":
-            optimizer = torch.optim.RMSprop(self.model.parameters(), lr=self.lr)
+                optimizer = torch.optim.RMSprop(self.model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
         else:
             raise Exception("Invalid optimizer name!")
 
