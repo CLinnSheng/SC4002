@@ -63,7 +63,7 @@ def test_top_n_models(
         model = model_classifier.load_from_checkpoint(checkpoint_files[0])
 
         test_dataloader = DataLoader(test_dataset)
-        trainer = L.Trainer(accelerator="cpu")
+        trainer = L.Trainer(accelerator="auto")
         results = trainer.test(model, test_dataloader)
 
         if results:

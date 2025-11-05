@@ -20,6 +20,7 @@ class RNN(nn.Module):
         bidirectional: bool = False,
         dropout: float = 0.0,
         embedding_dropout: float = 0.0,
+        fc_dropout: float = 0.0,
     ):
         """
         RNN model with pretrained embeddings for text classification tasks.
@@ -44,7 +45,9 @@ class RNN(nn.Module):
         self.bidirectional = bidirectional
         self.rnn_type = rnn_type
         self.dropout = dropout
+
         self.embedding_dropout = nn.Dropout(embedding_dropout)
+        self.fc_dropout = nn.Dropout(fc_dropout)
 
         if sentence_representation_type not in ["last", "max", "average"]:
             raise Exception(
@@ -95,7 +98,6 @@ class RNN(nn.Module):
         self.fc = nn.Linear(rnn_output_dim, rnn_output_dim // 2)
         self.relu = nn.ReLU()
         self.fc2 = nn.Linear(rnn_output_dim // 2, output_dim)
-        self.fc_dropout = nn.Dropout(dropout)
 
     def forward(self, sequences, original_len):
         embeddings = self.embedding(sequences)
@@ -162,7 +164,9 @@ class RNN(nn.Module):
             # logits = self.fc2(self.relu(self.fc(sentence_representation)))
 
         sentence_representation = self.fc_dropout(sentence_representation)
-        logits = self.fc2(self.relu(self.fc(sentence_representation)))
+        hidden_out = self.relu(self.fc(sentence_representation))
+        hidden_out = self.fc_dropout(hidden_out)
+        logits = self.fc2(hidden_out)
 
         return logits
 
@@ -194,8 +198,17 @@ class RNNClassifier(L.LightningModule):
         self.lr = lr
         self.show_progress = show_progress
         self.weight_decay = weight_decay
+
         self.metric = MulticlassAccuracy(num_classes=6)
         self.save_hyperparameters()
+
+        # self.train_metric = MulticlassAccuracy(num_classes=6)
+        # self.val_metric = MulticlassAccuracy(num_classes=6)
+        # self.test_metric = MulticlassAccuracy(num_classes=6)
+
+        # self.save_hyperparameters(ignore=["model"])
+        self.train_epoch_losses = []
+        self.val_epoch_accs = []
 
     def training_step(self, batch, batch_idx):
         indexes = batch["indexes"]
@@ -203,12 +216,15 @@ class RNNClassifier(L.LightningModule):
         original_lens = batch["original_len"]
 
         logits = self.model(indexes, original_lens)
-
         loss = F.cross_entropy(logits, labels)
         acc = self.metric(logits, labels)
 
         self.log("train_loss", loss, prog_bar=self.show_progress)
         self.log("train_acc", acc, prog_bar=self.show_progress)
+
+        # Set it for plotting the graph on every epoch
+        # self.log("train_loss", loss, prog_bar=self.show_progress, on_epoch=True, on_step=True)
+        # self.log("train_acc", acc, prog_bar=self.show_progress, on_epoch=True, on_step=True)
 
         return loss
 
@@ -224,6 +240,10 @@ class RNNClassifier(L.LightningModule):
 
         self.log("val_loss", loss, prog_bar=self.show_progress)
         self.log("val_acc", acc, prog_bar=self.show_progress)
+
+        # Set it for plotting the graph on every epoch
+        # self.log("val_loss", loss, prog_bar=self.show_progress, on_epoch=True, on_step=True)
+        # self.log("val_acc", acc, prog_bar=self.show_progress, on_epoch=True, on_step=True)
 
     def test_step(self, batch, batch_idx):
         indexes = batch["indexes"]
@@ -258,3 +278,13 @@ class RNNClassifier(L.LightningModule):
             raise Exception("Invalid optimizer name!")
 
         return optimizer
+
+    # For plotting graph on every epoch
+    # def on_train_epoch_end(self):
+    #     if 'train_loss' in self.trainer.callback_metrics:
+    #         self.train_epoch_losses.append(self.trainer.callback_metrics['train_loss'].item())
+        
+    # def on_validation_epoch_end(self):
+    #     if  not self.trainer.sanity_checking:
+    #         if 'val_acc' in self.trainer.callback_metrics:
+    #             self.val_epoch_accs.append(self.trainer.callback_metrics['val_acc'].item())
